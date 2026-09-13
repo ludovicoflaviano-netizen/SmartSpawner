@@ -1,10 +1,11 @@
 name: SmartSpawner
-version: 1.0.0
+version: 1.1.0
 main: net.ludovicoflaviano.smartspawner.SmartSpawnerPlugin
 api-version: '1.21'
-author: ludovicoflaviano-netizen
-description: Smart virtual-storage spawners with upgrades and Vault economy.
-softdepend: [Vault, EconomyShopGUI]
+author: ludovico-flaviano-netizen
+description: Smart virtual-storage spawners with detected mob types, clean upgrade branches and Vault economy.
+depend: [Vault]
+softdepend: [EconomyShopGUI]
 commands:
   smartspawner:
     description: Manage SmartSpawner items.
