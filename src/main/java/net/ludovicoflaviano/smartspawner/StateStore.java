@@ -1,8 +1,9 @@
 package net.ludovicoflaviano.smartspawner;
 
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.World;
 import org.bukkit.configuration.file.YamlConfiguration;
-import org.bukkit.inventory.ItemStack;
 
 import java.io.File;
 import java.io.IOException;
@@ -23,6 +24,19 @@ public final class StateStore {
     public SpawnerState get(Location l) { return states.computeIfAbsent(key(l), k -> new SpawnerState()); }
     public void put(Location l, SpawnerState state) { states.put(key(l), state); save(); }
     public void remove(Location l) { states.remove(key(l)); save(); }
+
+    public Set<Location> locations() {
+        Set<Location> result = new HashSet<>();
+        for (String k : states.keySet()) {
+            String[] p = k.split(":");
+            if (p.length != 4) continue;
+            try {
+                World world = Bukkit.getWorld(UUID.fromString(p[0]));
+                if (world != null) result.add(new Location(world, Integer.parseInt(p[1]), Integer.parseInt(p[2]), Integer.parseInt(p[3])));
+            } catch (Exception ignored) {}
+        }
+        return result;
+    }
 
     public void load() {
         states.clear();
