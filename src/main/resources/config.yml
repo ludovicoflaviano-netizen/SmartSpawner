@@ -1,0 +1,26 @@
+settings:
+  storage-slots: 45
+  production:
+    level-1-seconds: 60
+    level-2-seconds: 40
+    level-3-seconds: 25
+    level-1-multiplier: 1
+    level-2-multiplier: 2
+    level-3-multiplier: 3
+    level-1-xp: 5
+    level-2-xp: 10
+    level-3-xp: 20
+  upgrades:
+    level-2-cost: 1000000.0
+    level-3-cost: 10000000.0
+  pickup:
+    allow-break: true
+    drop-xp-in-item: true
+messages:
+  prefix: "<gray>[<aqua>sᴍᴀʀᴛ sᴘᴀᴡɴᴇʀ</aqua>]</gray> "
+  no-vault: "<red>Vault economy was not found. SmartSpawner is disabled.</red>"
+  max-level: "<yellow>This spawner is already level 3.</yellow>"
+  not-enough-money: "<red>You need <white>$%s</white> to upgrade this spawner.</red>"
+  upgraded: "<green>Spawner upgraded to level <white>%s</white>.</green>"
+  admin-only: "<red>You do not have permission.</red>"
+  given: "<green>Given <white>%s</white> x%s.</green>"
