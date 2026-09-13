@@ -4,7 +4,6 @@ import net.milkbowl.vault.economy.Economy;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.*;
-import org.bukkit.block.Block;
 import org.bukkit.block.CreatureSpawner;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -28,7 +27,6 @@ import org.bukkit.loot.LootTable;
 import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitRunnable;
-import org.bukkit.util.Vector;
 
 import java.util.*;
 
@@ -39,6 +37,8 @@ public final class SmartSpawnerPlugin extends JavaPlugin implements Listener, Ta
     private NamespacedKey itemStateKey;
     private NamespacedKey itemMarkerKey;
     private final Map<UUID, Location> openSpawners = new HashMap<>();
+    private final Map<String, Long> nextProduction = new HashMap<>();
+    private final Set<Location> active = new HashSet<>();
 
     @Override public void onEnable() {
         saveDefaultConfig();
@@ -48,6 +48,7 @@ public final class SmartSpawnerPlugin extends JavaPlugin implements Listener, Ta
         if (rsp != null) economy = rsp.getProvider();
         if (economy == null) { getLogger().severe("Vault economy provider was not found. SmartSpawner is disabled."); return; }
         store = new StateStore(this);
+        active.addAll(store.locations());
         Bukkit.getPluginManager().registerEvents(this, this);
         Objects.requireNonNull(getCommand("smartspawner")).setExecutor(this);
         Objects.requireNonNull(getCommand("smartspawner")).setTabCompleter(this);
@@ -59,28 +60,15 @@ public final class SmartSpawnerPlugin extends JavaPlugin implements Listener, Ta
 
     private void startProductionTask() {
         new BukkitRunnable() {
-            @Override public void run() {
-                if (store == null) return;
-                for (World world : Bukkit.getWorlds()) {
-                    // State is location keyed; production is checked by currently loaded spawner blocks.
-                    for (Chunk chunk : world.getLoadedChunks()) {
-                        for (int cx = 0; cx < 16; cx++) for (int cz = 0; cz < 16; cz++) {
-                            // Intentionally no full block scan: state locations are processed through the lightweight state map below.
-                        }
-                    }
-                }
-                tickKnownSpawners();
-            }
+            @Override public void run() { tickKnownSpawners(); }
         }.runTaskTimer(this, 20L, 20L);
     }
 
-    private final Map<String, Long> nextProduction = new HashMap<>();
-
     private void tickKnownSpawners() {
-        // Production is driven by spawners that have been opened/placed during this runtime.
-        // Persisted spawners resume when opened; this avoids scanning every block in every loaded chunk.
-        for (Location loc : new ArrayList<>(activeLocations())) {
-            if (!loc.getChunk().isLoaded() || loc.getBlock().getType() != Material.SPAWNER) { nextProduction.remove(key(loc)); continue; }
+        if (store == null) return;
+        active.addAll(store.locations());
+        for (Location loc : new HashSet<>(active)) {
+            if (!loc.getChunk().isLoaded() || loc.getBlock().getType() != Material.SPAWNER) continue;
             SpawnerState state = store.get(loc);
             long now = System.currentTimeMillis();
             long interval = intervalSeconds(state.level()) * 1000L;
@@ -91,8 +79,6 @@ public final class SmartSpawnerPlugin extends JavaPlugin implements Listener, Ta
         }
     }
 
-    private final Set<Location> active = new HashSet<>();
-    private Set<Location> activeLocations() { return new HashSet<>(active); }
     private String key(Location l) { return l.getWorld().getUID()+":"+l.getBlockX()+":"+l.getBlockY()+":"+l.getBlockZ(); }
     private long intervalSeconds(int level) { return getConfig().getLong("settings.production.level-"+level+"-seconds", level==1?60:level==2?40:25); }
     private int multiplier(int level) { return getConfig().getInt("settings.production.level-"+level+"-multiplier", level); }
@@ -192,29 +178,23 @@ public final class SmartSpawnerPlugin extends JavaPlugin implements Listener, Ta
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onDrop(BlockDropItemEvent e) {
         if (e.getBlockState().getType() != Material.SPAWNER || store == null) return;
-        Location loc = e.getBlock().getLocation();
+        Location loc = e.getBlockState().getLocation();
         SpawnerState state = store.get(loc);
         for (org.bukkit.entity.Item entity : e.getItems()) {
             ItemStack stack = entity.getItemStack();
-            if (stack.getType() == Material.SPAWNER) {
-                entity.setItemStack(createSpawnerItem(state));
-            }
+            if (stack.getType() == Material.SPAWNER) entity.setItemStack(createSpawnerItem(state));
         }
         store.remove(loc); active.remove(loc); nextProduction.remove(key(loc));
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onBreak(BlockBreakEvent e) {
-        if (e.getBlock().getType() == Material.SPAWNER) {
-            Location loc = e.getBlock().getLocation();
-            active.add(loc.clone());
-            // State remains available until BlockDropItemEvent converts the actual spawner drop.
-        }
+        if (e.getBlock().getType() == Material.SPAWNER) active.add(e.getBlock().getLocation().clone());
     }
 
     @EventHandler public void onQuit(PlayerQuitEvent e) {
         Location loc = openSpawners.remove(e.getPlayer().getUniqueId());
-        if (loc != null) saveGui(e.getPlayer().getOpenInventory().getTopInventory(), loc);
+        if (loc != null && e.getPlayer().getOpenInventory().getTopInventory().getHolder() instanceof SpawnerHolder) saveGui(e.getPlayer().getOpenInventory().getTopInventory(), loc);
     }
 
     private void openGui(Player player, Location loc) {
@@ -224,16 +204,14 @@ public final class SmartSpawnerPlugin extends JavaPlugin implements Listener, Ta
         int i=0; for (ItemStack item : state.drops()) { if (i>=slots) break; inv.setItem(i++, item.clone()); }
         fillButton(inv, 45, Material.EXPERIENCE_BOTTLE, "xᴘ sᴛᴏʀᴀɢᴇ", "<green>"+format(state.storedXp())+" xᴘ</green>", "cʟɪᴄᴋ ᴛᴏ ᴄᴏʟʟᴇᴄᴛ");
         fillButton(inv, 49, Material.SPAWNER, "ʟᴇᴠᴇʟ "+state.level(), "<gray>ᴛʏᴘᴇ: <white>"+pretty(state.type().name())+"</white></gray>", "<gray>ᴜᴘɢʀᴀᴅᴇ ᴄᴏsᴛs: <white>"+upgradeCostText(state.level())+"</white></gray>");
-        fillButton(inv, 53, Material.EMERALD, "ᴜᴘɢʀᴀᴅᴇ", "<gray>ᴍᴀx ʟᴇᴠᴇʟ: <white>3</white></gray>", "<yellow>ᴄʟɪᴄᴋ ᴛᴏ ᴜᴘɢʀᴀᴅ</yellow>");
+        fillButton(inv, 53, Material.EMERALD, "ᴜᴘɢʀᴀᴅᴇ", "<gray>ᴍᴀx ʟᴇᴠᴇʟ: <white>3</white></gray>", "<yellow>ᴄʟɪᴄᴋ ᴛᴏ ᴜᴘɢʀᴀᴅᴇ</yellow>");
         openSpawners.put(player.getUniqueId(), loc.clone());
         player.openInventory(inv);
     }
 
     private void fillButton(Inventory inv, int slot, Material material, String name, String... lore) {
         ItemStack item = new ItemStack(material); ItemMeta meta=item.getItemMeta();
-        meta.displayName(Component.text(name));
-        List<Component> lines=new ArrayList<>(); for(String line:lore) lines.add(Component.text(strip(line)));
-        meta.lore(lines); item.setItemMeta(meta); inv.setItem(slot,item);
+        meta.displayName(Component.text(name)); List<Component> lines=new ArrayList<>(); for(String line:lore) lines.add(Component.text(strip(line))); meta.lore(lines); item.setItemMeta(meta); inv.setItem(slot,item);
     }
     private String strip(String s) { return ChatColor.translateAlternateColorCodes('&', s.replaceAll("<[^>]+>", "")); }
     private String format(double n) { return String.format(Locale.US, "%,.0f", n); }
@@ -288,8 +266,7 @@ public final class SmartSpawnerPlugin extends JavaPlugin implements Listener, Ta
 
     private SpawnerState readItemState(ItemStack item) {
         if(item==null||item.getType()!=Material.SPAWNER||!item.hasItemMeta()) return null;
-        String raw=item.getItemMeta().getPersistentDataContainer().get(itemStateKey,PersistentDataType.STRING);
-        return raw==null?null:SpawnerState.deserialize(raw);
+        String raw=item.getItemMeta().getPersistentDataContainer().get(itemStateKey,PersistentDataType.STRING); return raw==null?null:SpawnerState.deserialize(raw);
     }
 
     @Override public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
@@ -297,14 +274,14 @@ public final class SmartSpawnerPlugin extends JavaPlugin implements Listener, Ta
         if(args.length>=3 && args[0].equalsIgnoreCase("give")){
             Player target=Bukkit.getPlayerExact(args[1]); if(target==null){sender.sendMessage(Component.text("ᴘʟᴀʏᴇʀ ɴᴏᴛ ғᴏᴜɴᴅ",NamedTextColor.RED));return true;}
             EntityType type; try{type=EntityType.valueOf(args[2].toUpperCase(Locale.ROOT));}catch(Exception ex){sender.sendMessage(Component.text("ɪɴᴠᴀʟɪᴅ ᴇɴᴛɪᴛʏ ᴛʏᴘᴇ",NamedTextColor.RED));return true;}
-            int amount=args.length>=4?Math.max(1,Integer.parseInt(args[3])):1; SpawnerState s=new SpawnerState();s.type(type);ItemStack item=createSpawnerItem(s);item.setAmount(Math.min(item.getMaxStackSize(),amount));target.getInventory().addItem(item);sender.sendMessage(Component.text("ɢɪᴠᴇɴ sᴍᴀʀᴛ sᴘᴀᴡɴᴇʀ",NamedTextColor.GREEN));return true;
+            int amount=1; if(args.length>=4) try{amount=Math.max(1,Integer.parseInt(args[3]));}catch(Exception ignored){}
+            ItemStack item=createSpawnerItem(newState(type)); while(amount>0){int give=Math.min(item.getMaxStackSize(),amount);ItemStack part=item.clone();part.setAmount(give);target.getInventory().addItem(part);amount-=give;}
+            sender.sendMessage(Component.text("ɢɪᴠᴇɴ sᴍᴀʀᴛ sᴘᴀᴡɴᴇʀ",NamedTextColor.GREEN));return true;
         }
         sender.sendMessage(Component.text("/smartspawner give <player> <entity> [amount]",NamedTextColor.GRAY));return true;
     }
 
-    @Override public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args){
-        if(args.length==1)return List.of("give"); if(args.length==3){String q=args[2].toUpperCase(Locale.ROOT);return Arrays.stream(EntityType.values()).filter(EntityType::isAlive).map(Enum::name).filter(n->n.startsWith(q)).limit(50).toList();} return List.of();
-    }
-
+    private SpawnerState newState(EntityType type){SpawnerState s=new SpawnerState();s.type(type);return s;}
+    @Override public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args){ if(args.length==1)return List.of("give"); if(args.length==3){String q=args[2].toUpperCase(Locale.ROOT);return Arrays.stream(EntityType.values()).filter(EntityType::isAlive).map(Enum::name).filter(n->n.startsWith(q)).limit(50).toList();} return List.of(); }
     private record SpawnerHolder(Location location) implements InventoryHolder { @Override public Inventory getInventory(){return null;} }
 }
